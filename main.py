@@ -15,7 +15,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import yfinance as yf
 
-load_dotenv()
+load_dotenv("/etc/secrets/.env")
+
 
 # ==============================================================================
 # 1. State and Tool Definitions
