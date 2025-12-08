@@ -14,7 +14,7 @@ app = FastAPI(
     version="3.0.0",
 )
 
-# 🔓 Allow ALL origins, no credentials (simplest, safest for now)
+# Allow ALL origins, no credentials (simplest, safest for now)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],        # <-- wild-card origin
