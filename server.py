@@ -15,17 +15,21 @@ app = FastAPI(
     version="3.0.0"
 )
 
-origins = [
-    "http://localhost:3000",
-    "https://financial-agent-ui-theta.vercel.app",
-]
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(
+    title="AI Financial Analyst API",
+    description="A conversational API for financial analysis and charting.",
+    version="3.0.0",
+)
+
+# Temporarily allow all origins (you can restrict later)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],      # 👈 key change
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    
 )
 
 # LangServe routes (keep)
@@ -45,7 +49,7 @@ class ChatResponse(BaseModel):
     text_response: str
     chart_image: Optional[str] = None
 
-# 🔴 NEW: simple in-memory history for this demo
+
 GLOBAL_HISTORY: List[Tuple[str, str]] = []
 GLOBAL_SYMBOLS: List[str] = [] 
 
