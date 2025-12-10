@@ -14,6 +14,12 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import yfinance as yf
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*Ticker.earnings.*",
+    category=DeprecationWarning,
+)
 
 load_dotenv("/etc/secrets/.env")
 
@@ -105,27 +111,40 @@ def generate_chart_tool(stock_symbols: List[str]):
     return image_base64
 
 def get_latest_earnings_tool(stock_symbol: str):
-    """Fetches the latest quarterly earnings data for a given stock symbol using yfinance."""
+    """Fetch the latest quarterly EPS in a structured way."""
     print(f"---Tool: Fetching Earnings for {stock_symbol} (yfinance)---")
 
     try:
         ticker = yf.Ticker(stock_symbol)
-        earnings = ticker.quarterly_earnings  # DataFrame: index=fiscal period, cols=['Revenue','Earnings']
+        earnings = ticker.quarterly_earnings  # DataFrame
 
         if earnings is None or earnings.empty:
-            return f"No earnings data found for {stock_symbol}."
+            return {
+                "available": False,
+                "symbol": stock_symbol,
+                "fiscal_end": None,
+                "eps": None,
+            }
 
-        latest = earnings.iloc[-1]   # last row
-        fiscal_end = latest.name     # index label
+        latest = earnings.iloc[-1]
+        fiscal_end = latest.name
         reported_eps = latest.get("Earnings")
 
-        return (
-            f"Latest Earnings Report for {stock_symbol}:\n"
-            f"- Fiscal Date Ending: {fiscal_end}\n"
-            f"- Reported EPS: {reported_eps}"
-        )
+        return {
+            "available": True,
+            "symbol": stock_symbol,
+            "fiscal_end": str(fiscal_end),
+            "eps": float(reported_eps) if reported_eps is not None else None,
+        }
     except Exception as e:
-        return f"An unexpected error occurred while fetching earnings for {stock_symbol}: {e}"
+        print(f"earnings error for {stock_symbol}: {e}")
+        return {
+            "available": False,
+            "symbol": stock_symbol,
+            "fiscal_end": None,
+            "eps": None,
+        }
+
 
 def get_company_overview_tool(stock_symbol: str):
     """Fetches company overview data, including key metrics and description using yfinance."""
@@ -203,26 +222,31 @@ def single_stock_agent_node(state: GraphState):
     question = state["question"]
     symbol = state["stock_symbols"][0]
 
-    # --- Raw tools (same as before) ---
-    earnings_raw = get_latest_earnings_tool(symbol)
+    # --- Raw tools ---
+    earnings_struct = get_latest_earnings_tool(symbol)
     overview_context = get_company_overview_tool(symbol)
     chart_image = generate_chart_tool(state["stock_symbols"])
 
-    # --- Normalize earnings context for the LLM ---
-    # We don't want phrases like "No earnings data found..." to appear in the UI.
-    if earnings_raw.startswith("No earnings data found") or \
-       earnings_raw.startswith("An unexpected error occurred"):
-        earnings_available = False
-        earnings_context = ""
-    else:
+    # Build a deterministic earnings summary in code
+    if earnings_struct["available"] and earnings_struct["eps"] is not None:
         earnings_available = True
-        earnings_context = earnings_raw
+        earnings_summary = (
+            f"Latest reported quarterly EPS for {symbol}: "
+            f"{earnings_struct['eps']} (fiscal period ending {earnings_struct['fiscal_end']})."
+        )
+    else:
+        earnings_available = False
+        earnings_summary = (
+            f"Recent quarterly EPS data for {symbol} is not available from the current data source. "
+            "Investors typically focus on this company's revenue growth, margins, and guidance "
+            "when evaluating its earnings."
+        )
 
     llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
 
     prompt = f"""You are a sophisticated financial analyst AI. Your goal is to provide a synthesized analysis for the user.
 A performance chart is being generated and displayed to the user alongside your text response.
-Use the following up-to-date data to create your analysis. Format your response using clear markdown headings.
+Use the following data to create your analysis. Format your response using clear markdown headings.
 
 ## Summary
 Start with a brief summary that directly answers the user's question about recent performance.
@@ -232,23 +256,27 @@ Do not talk about missing data, APIs, or limitations.
 Create a markdown table summarizing the key metrics from the company overview. Include: Market Cap, P/E Ratio, EPS, 52-Week High, and 52-Week Low.
 
 ## Earnings Performance
-- If earnings data are available (EARNINGS_AVAILABLE is True), use the earnings information provided below.
-- If earnings data are NOT available (EARNINGS_AVAILABLE is False), write a short, high-level paragraph about how investors typically look at this company's earnings (for example: revenue growth, margins, cyclicality, sensitivity to guidance), **without** giving any specific recent quarter numbers, dates, or pretending you know the latest report.
-- In all cases, DO NOT mention that data is missing, unavailable, that there was an error, or reference any tool/API/source.
+Start this section by **copying the following sentence EXACTLY** as the first paragraph:
+
+{earnings_summary}
+
+After that first paragraph, you may optionally add 1–2 sentences giving additional investment context
+(e.g., how investors might interpret these earnings relative to the business or macro conditions).
+
+Do **NOT** say that earnings data are missing, not released yet, or unavailable if the sentence above
+already states that EPS is known. Do **NOT** contradict the given EPS value or fiscal date.
 
 ## Overall Analysis & Chart Context
-In your concluding thoughts, briefly describe the company's business. Then, explicitly address the relationship between the financial data and the stock's price trend visible in the chart. For example, if fundamentals look strong but the stock is trending down, you might attribute that to broader market trends, sector rotation, or cautious guidance. Assume the chart shows the last 3–6 months of performance.
+In your concluding thoughts, briefly describe the company's business. Then, explicitly address the
+relationship between the financial data and the stock's price trend visible in the chart. Assume the chart
+shows the last 3–6 months of performance.
 
 Do not mention tools, APIs, rate limits, or data sources in your answer.
 
 ---
-EARNINGS_AVAILABLE: {earnings_available}
+EARNINGS_AVAILABLE_FLAG: {earnings_available}
 
-LATEST EARNINGS DATA (if available):
-{earnings_context}
-
----
-COMPANY OVERVIEW DATA:
+RAW COMPANY OVERVIEW DATA:
 {overview_context}
 
 ---
@@ -257,8 +285,6 @@ USER'S QUESTION: "{question}"
 
     analysis_text = llm.invoke(prompt).content
     return {"text_response": analysis_text, "chart_image": chart_image}
-
-
 
 
 def extract_symbols_node(state: GraphState):
