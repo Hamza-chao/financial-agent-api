@@ -46,22 +46,36 @@ class StockSymbols(BaseModel):
 # ==============================================================================
 # 2. Tool Functions
 # ==============================================================================
+COMMON_NAME_TO_TICKER = {
+    "google": "GOOGL",
+    "alphabet": "GOOGL",
+    "amazon": "AMZN",
+    "apple": "AAPL",
+    "microsoft": "MSFT",
+    "meta": "META",
+    "facebook": "META",
+    "tesla": "TSLA",
+    "coca cola": "KO",
+    "coca-cola": "KO",
+    "nvidia": "NVDA",
+}
+
 
 def fetch_stock_data(stock_symbol: str):
-    """Fetches historical daily close prices for a stock using yfinance."""
     print(f"---yfinance: fetching price history for {stock_symbol}---")
     try:
         ticker = yf.Ticker(stock_symbol)
-        # Last 6 months of daily data (you can tweak this)
         hist = ticker.history(period="6mo", interval="1d")
+        print(f"history rows for {stock_symbol}: {len(hist)}")
         if hist.empty:
             print(f"yfinance: no data for {stock_symbol}")
             return None
-        # Return a pandas Series similar to the old '4. close'
+        hist = hist.dropna(subset=["Close"])
         return hist["Close"]
     except Exception as e:
         print(f"yfinance error for {stock_symbol}: {e}")
         return None
+
 
 def generate_chart_tool(stock_symbols: List[str]):
     """Generates a base64-encoded PNG image of stock performance."""
@@ -172,7 +186,7 @@ def get_company_overview_tool(stock_symbol: str):
 # 3. Graph Nodes
 # ==============================================================================
 def extract_symbols_from_text(text: str) -> List[str]:
-    """Extract ticker symbols from arbitrary text using LLM + regex fallback."""
+    """Extract ticker symbols from arbitrary text using LLM + regex + name heuristics."""
     text = text.strip()
     if not text:
         return []
@@ -201,20 +215,25 @@ Text:
     if getattr(response, "tool_calls", None):
         llm_symbols = response.tool_calls[0]["args"].get("symbols", []) or []
 
-    # Regex fallback on the same text
+    # Regex fallback
     regex_pattern = r"\b[A-Z]{2,5}\b"
     raw_regex_symbols = re.findall(regex_pattern, text)
-
-    # Filter obvious non-tickers (and the annoying 'AT' from phrases like "at 5pm")
     blacklist = {"EPS", "API", "PE", "PES", "ETF", "IPO", "HTTP", "JSON", "AT", "AI"}
-
     regex_symbols = [s for s in raw_regex_symbols if s not in blacklist]
 
-    combined = llm_symbols + regex_symbols
+    # Heuristic: map common names → tickers
+    name_symbols: list[str] = []
+    lower = text.lower()
+    for name, ticker in COMMON_NAME_TO_TICKER.items():
+        if name in lower:
+            name_symbols.append(ticker)
+
+    combined = llm_symbols + regex_symbols + name_symbols
     final = sorted(list(set(combined)))
 
-    print(f"---extract_symbols_from_text | LLM: {llm_symbols} | Regex: {regex_symbols} | Final: {final}---")
+    print(f"---extract_symbols_from_text | LLM: {llm_symbols} | Regex: {regex_symbols} | Names: {name_symbols} | Final: {final}---")
     return final
+
 
 def single_stock_agent_node(state: GraphState):
     """Provides a detailed, synthesized analysis of a single stock, including a table."""
